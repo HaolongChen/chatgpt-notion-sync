@@ -211,12 +211,31 @@
     "database_id": "example-database-id-12345",
     "page_id": null,
     "sync_status": "completed",
-    "lastSyncDate": "2025-12-11T13:01:00Z",
+    "lastSyncDate": "2025-12-11T17:00:00Z",
     "last_synced": null,
     "sync_version": "1.0.0",
     "tags": ["distributed-systems", "python", "redis", "backend", "architecture"],
     "category": "technical",
-    "priority": "high"
+    "priority": "high",
+    "sync_logs": [
+      {
+        "sync_date": "2025-12-11T17:00:00Z",
+        "sync_timestamp_est": "2025-12-11 12:00 PM EST",
+        "status": "success",
+        "message": "Successfully synced conversation insights data to Notion database",
+        "details": {
+          "files_processed": 1,
+          "data_type": "conversation_insights",
+          "record_count": 1,
+          "insights_synced": {
+            "technical_insights": 3,
+            "key_skills": 5,
+            "actionable_insights": 4,
+            "project_interests": 2
+          }
+        }
+      }
+    ]
   },
   
   "validation": {
