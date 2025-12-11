@@ -210,7 +210,8 @@
   "notion_metadata": {
     "database_id": "example-database-id-12345",
     "page_id": null,
-    "sync_status": "pending",
+    "sync_status": "completed",
+    "lastSyncDate": "2025-12-11T13:01:00Z",
     "last_synced": null,
     "sync_version": "1.0.0",
     "tags": ["distributed-systems", "python", "redis", "backend", "architecture"],
