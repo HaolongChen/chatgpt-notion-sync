@@ -1,0 +1,558 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/HaolongChen/chatgpt-notion-sync/schemas/conversation-insights-schema.json",
+  "title": "Conversation Insights Schema",
+  "description": "Comprehensive schema for validating conversation analysis and insights data",
+  "type": "object",
+  "required": [
+    "conversation_id",
+    "analysis_date",
+    "technical_insights",
+    "problem_solving_patterns",
+    "communication_style",
+    "key_skills",
+    "topics_of_interest",
+    "confidence_score",
+    "metadata",
+    "validation"
+  ],
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "description": "Unique identifier for the conversation",
+      "pattern": "^conv_[a-zA-Z0-9]+$",
+      "minLength": 10,
+      "maxLength": 100
+    },
+    "analysis_date": {
+      "type": "string",
+      "description": "ISO 8601 timestamp of when the analysis was performed",
+      "format": "date-time"
+    },
+    "conversation_timestamp": {
+      "type": "string",
+      "description": "ISO 8601 timestamp of when the conversation occurred",
+      "format": "date-time"
+    },
+    "conversation_title": {
+      "type": "string",
+      "description": "Title or subject of the conversation",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "conversation_summary": {
+      "type": "string",
+      "description": "Brief summary of the conversation content",
+      "minLength": 10,
+      "maxLength": 2000
+    },
+    "technical_insights": {
+      "type": "array",
+      "description": "Array of technical insights extracted from the conversation",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": ["topic", "insight", "complexity_level", "relevance_score"],
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "The technical topic or domain",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "insight": {
+            "type": "string",
+            "description": "Detailed insight or learning from the conversation",
+            "minLength": 10,
+            "maxLength": 2000
+          },
+          "complexity_level": {
+            "type": "string",
+            "description": "Complexity level of the topic discussed",
+            "enum": ["beginner", "intermediate", "advanced", "expert"]
+          },
+          "relevance_score": {
+            "type": "number",
+            "description": "Relevance score of the insight (0-1)",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "problem_solving_patterns": {
+      "type": "object",
+      "description": "Analysis of problem-solving approach and patterns",
+      "required": ["approach", "thinking_style", "patterns_identified", "strengths"],
+      "properties": {
+        "approach": {
+          "type": "string",
+          "description": "Overall problem-solving approach",
+          "enum": ["systematic", "exploratory", "iterative", "analytical", "creative", "hybrid"]
+        },
+        "thinking_style": {
+          "type": "string",
+          "description": "Characteristic thinking style",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "patterns_identified": {
+          "type": "array",
+          "description": "Identified problem-solving patterns",
+          "minItems": 0,
+          "items": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          }
+        },
+        "strengths": {
+          "type": "array",
+          "description": "Identified strengths in problem-solving",
+          "minItems": 0,
+          "items": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          }
+        },
+        "areas_for_improvement": {
+          "type": "array",
+          "description": "Areas that could be improved",
+          "minItems": 0,
+          "items": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "communication_style": {
+      "type": "object",
+      "description": "Analysis of communication style and patterns",
+      "required": ["clarity", "technical_depth", "question_quality", "characteristics", "engagement_level"],
+      "properties": {
+        "clarity": {
+          "type": "string",
+          "description": "Clarity level of communication",
+          "enum": ["low", "medium", "high", "very high"]
+        },
+        "technical_depth": {
+          "type": "string",
+          "description": "Level of technical depth in communication",
+          "enum": ["basic", "intermediate", "advanced", "expert"]
+        },
+        "question_quality": {
+          "type": "string",
+          "description": "Quality of questions asked",
+          "enum": ["poor", "fair", "good", "excellent", "exceptional"]
+        },
+        "characteristics": {
+          "type": "array",
+          "description": "Characteristic communication patterns",
+          "minItems": 0,
+          "items": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          }
+        },
+        "engagement_level": {
+          "type": "string",
+          "description": "Level of engagement in the conversation",
+          "enum": ["low", "moderate", "engaged", "highly engaged", "deeply engaged"]
+        },
+        "follow_up_questions": {
+          "type": "integer",
+          "description": "Number of follow-up questions asked",
+          "minimum": 0
+        },
+        "average_message_length": {
+          "type": "number",
+          "description": "Average length of messages in characters",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "key_skills": {
+      "type": "array",
+      "description": "Key skills identified from the conversation",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": ["skill", "proficiency", "evidence", "confidence"],
+        "properties": {
+          "skill": {
+            "type": "string",
+            "description": "Name of the skill",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "proficiency": {
+            "type": "string",
+            "description": "Proficiency level in the skill",
+            "pattern": "^(beginner|intermediate|advanced|expert|beginner-intermediate|intermediate-advanced|advanced-expert)$"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Evidence supporting the proficiency assessment",
+            "minLength": 10,
+            "maxLength": 1000
+          },
+          "confidence": {
+            "type": "number",
+            "description": "Confidence score for the assessment (0-1)",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "topics_of_interest": {
+      "type": "array",
+      "description": "Topics the user has shown interest in",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": ["topic", "frequency", "depth"],
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "Name of the topic",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "frequency": {
+            "type": "integer",
+            "description": "How often the topic appears",
+            "minimum": 0
+          },
+          "depth": {
+            "type": "string",
+            "description": "Depth of engagement with the topic",
+            "enum": ["surface", "moderate", "deep", "very deep", "expert"]
+          },
+          "subcategories": {
+            "type": "array",
+            "description": "Subcategories or related topics",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "project_interests": {
+      "type": "array",
+      "description": "Projects the user is interested in or working on",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": ["project_type", "motivation", "current_stage"],
+        "properties": {
+          "project_type": {
+            "type": "string",
+            "description": "Type or name of the project",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "motivation": {
+            "type": "string",
+            "description": "Motivation for the project",
+            "minLength": 5,
+            "maxLength": 1000
+          },
+          "current_stage": {
+            "type": "string",
+            "description": "Current stage of the project",
+            "enum": ["idea", "research", "design", "implementation", "testing", "deployment", "maintenance", "completed"]
+          },
+          "technologies": {
+            "type": "array",
+            "description": "Technologies involved in the project",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "scope": {
+            "type": "string",
+            "description": "Scope or size of the project",
+            "enum": ["small", "medium", "large", "extra-large"]
+          },
+          "timeline": {
+            "type": "string",
+            "description": "Expected or actual timeline",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "challenges": {
+            "type": "array",
+            "description": "Key challenges in the project",
+            "items": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 500
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "confidence_score": {
+      "type": "number",
+      "description": "Overall confidence score for the analysis (0-1)",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Metadata about the conversation",
+      "required": ["total_messages", "conversation_duration_minutes", "language"],
+      "properties": {
+        "total_messages": {
+          "type": "integer",
+          "description": "Total number of messages in the conversation",
+          "minimum": 0
+        },
+        "conversation_duration_minutes": {
+          "type": "integer",
+          "description": "Duration of the conversation in minutes",
+          "minimum": 0
+        },
+        "code_snippets_shared": {
+          "type": "integer",
+          "description": "Number of code snippets shared",
+          "minimum": 0
+        },
+        "external_resources_referenced": {
+          "type": "integer",
+          "description": "Number of external resources referenced",
+          "minimum": 0
+        },
+        "model_version": {
+          "type": "string",
+          "description": "AI model version used",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "language": {
+          "type": "string",
+          "description": "Primary language of the conversation (ISO 639-1 code)",
+          "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+        },
+        "user_timezone": {
+          "type": "string",
+          "description": "User's timezone",
+          "minLength": 1,
+          "maxLength": 50
+        }
+      },
+      "additionalProperties": true
+    },
+    "learning_trajectory": {
+      "type": "object",
+      "description": "Learning progression and trajectory analysis",
+      "properties": {
+        "knowledge_progression": {
+          "type": "string",
+          "description": "Description of knowledge progression",
+          "minLength": 10,
+          "maxLength": 1000
+        },
+        "conceptual_gaps_filled": {
+          "type": "array",
+          "description": "Conceptual gaps that were addressed",
+          "items": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          }
+        },
+        "next_learning_steps": {
+          "type": "array",
+          "description": "Suggested next steps in learning journey",
+          "items": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "actionable_insights": {
+      "type": "array",
+      "description": "Actionable insights and recommendations",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": ["category", "insight", "action", "priority"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "Category of the insight",
+            "enum": [
+              "skill_development",
+              "project_recommendation",
+              "learning_path",
+              "tool_exploration",
+              "career_development",
+              "knowledge_gap",
+              "resource_recommendation",
+              "other"
+            ]
+          },
+          "insight": {
+            "type": "string",
+            "description": "The insight identified",
+            "minLength": 10,
+            "maxLength": 1000
+          },
+          "action": {
+            "type": "string",
+            "description": "Recommended action based on the insight",
+            "minLength": 10,
+            "maxLength": 1000
+          },
+          "priority": {
+            "type": "string",
+            "description": "Priority level of the action",
+            "enum": ["low", "medium", "high", "critical"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "notion_metadata": {
+      "type": "object",
+      "description": "Metadata for Notion integration",
+      "required": ["sync_status", "sync_version"],
+      "properties": {
+        "database_id": {
+          "type": ["string", "null"],
+          "description": "Notion database ID",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "page_id": {
+          "type": ["string", "null"],
+          "description": "Notion page ID",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "sync_status": {
+          "type": "string",
+          "description": "Current synchronization status",
+          "enum": ["pending", "syncing", "synced", "failed", "conflict"]
+        },
+        "last_synced": {
+          "type": ["string", "null"],
+          "description": "ISO 8601 timestamp of last sync",
+          "format": "date-time"
+        },
+        "sync_version": {
+          "type": "string",
+          "description": "Version of the sync schema",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Tags for categorization in Notion",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "category": {
+          "type": "string",
+          "description": "Primary category for the conversation",
+          "enum": ["technical", "general", "project", "learning", "debugging", "design", "other"]
+        },
+        "priority": {
+          "type": "string",
+          "description": "Priority level in Notion",
+          "enum": ["low", "medium", "high", "urgent"]
+        }
+      },
+      "additionalProperties": true
+    },
+    "validation": {
+      "type": "object",
+      "description": "Validation information for the insights data",
+      "required": ["schema_version", "validated_at", "validation_status"],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "description": "Version of the schema used for validation",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "validated_at": {
+          "type": "string",
+          "description": "ISO 8601 timestamp of validation",
+          "format": "date-time"
+        },
+        "validation_status": {
+          "type": "string",
+          "description": "Result of validation",
+          "enum": ["passed", "passed_with_warnings", "failed"]
+        },
+        "data_quality_score": {
+          "type": "number",
+          "description": "Overall data quality score (0-1)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "completeness": {
+          "type": "object",
+          "description": "Completeness metrics",
+          "properties": {
+            "required_fields": {
+              "type": "number",
+              "description": "Completeness of required fields (0-1)",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "optional_fields": {
+              "type": "number",
+              "description": "Completeness of optional fields (0-1)",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "warnings": {
+          "type": "array",
+          "description": "Validation warnings",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "errors": {
+          "type": "array",
+          "description": "Validation errors",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
