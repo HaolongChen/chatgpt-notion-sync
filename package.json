@@ -1,0 +1,52 @@
+{
+  "name": "chatgpt-notion-sync",
+  "version": "1.0.0",
+  "description": "Automated sync system for ChatGPT conversation analysis data to Notion databases",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest --coverage",
+    "test:watch": "jest --watch",
+    "test:integration": "jest --testPathPattern=tests/integration",
+    "lint": "eslint src/ tests/",
+    "lint:fix": "eslint src/ tests/ --fix",
+    "format": "prettier --write \"src/**/*.js\" \"tests/**/*.js\"",
+    "validate": "npm run lint && npm test",
+    "sync": "node src/index.js sync",
+    "sync:dry-run": "node src/index.js sync --dry-run",
+    "validate-config": "node src/utils/validateConfig.js"
+  },
+  "keywords": [
+    "chatgpt",
+    "notion",
+    "sync",
+    "automation",
+    "integration"
+  ],
+  "author": "Haolong Chen",
+  "license": "MIT",
+  "dependencies": {
+    "@notionhq/client": "^2.2.15",
+    "ajv": "^8.12.0",
+    "ajv-formats": "^2.1.1",
+    "winston": "^3.11.0",
+    "dotenv": "^16.3.1",
+    "config": "^3.3.9",
+    "axios": "^1.6.2",
+    "p-limit": "^5.0.0",
+    "p-retry": "^6.1.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.55.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-jest": "^27.6.0",
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2",
+    "prettier": "^3.1.1"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}

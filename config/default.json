@@ -1,0 +1,82 @@
+{
+  "sync": {
+    "batchSize": 10,
+    "maxBatchSize": 100,
+    "minBatchSize": 1,
+    "intervalMs": 300000,
+    "enableScheduledSync": false,
+    "syncOnStartup": true,
+    "dryRun": false
+  },
+  "rateLimit": {
+    "notion": {
+      "requestsPerSecond": 3,
+      "maxConcurrent": 3,
+      "burstLimit": 10
+    },
+    "chatgpt": {
+      "requestsPerSecond": 5,
+      "maxConcurrent": 5,
+      "burstLimit": 20
+    }
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "initialDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "backoffMultiplier": 2,
+    "retryableStatusCodes": [408, 429, 500, 502, 503, 504],
+    "enableExponentialBackoff": true
+  },
+  "timeout": {
+    "requestTimeoutMs": 30000,
+    "syncTimeoutMs": 600000
+  },
+  "validation": {
+    "strictMode": true,
+    "allowAdditionalProperties": false,
+    "validateBeforeSync": true
+  },
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "console": {
+      "enabled": true,
+      "colorize": true,
+      "timestamp": true
+    },
+    "file": {
+      "enabled": true,
+      "directory": "logs",
+      "filename": "chatgpt-notion-sync-%DATE%.log",
+      "datePattern": "YYYY-MM-DD",
+      "maxSize": "20m",
+      "maxFiles": "14d",
+      "compress": true
+    },
+    "error": {
+      "enabled": true,
+      "directory": "logs",
+      "filename": "error-%DATE%.log",
+      "datePattern": "YYYY-MM-DD",
+      "maxSize": "20m",
+      "maxFiles": "30d"
+    }
+  },
+  "monitoring": {
+    "enableMetrics": true,
+    "metricsPort": 9090,
+    "healthCheckEnabled": true,
+    "healthCheckPort": 8080
+  },
+  "database": {
+    "cacheEnabled": true,
+    "cacheTTLSeconds": 3600,
+    "maxCacheSize": 1000
+  },
+  "error": {
+    "exitOnFatalError": false,
+    "notifyOnError": false,
+    "maxConsecutiveErrors": 5
+  }
+}
