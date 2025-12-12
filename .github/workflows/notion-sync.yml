@@ -1,0 +1,355 @@
+name: Notion Sync Automation
+
+on:
+  # Run every 6 hours
+  schedule:
+    - cron: '0 */6 * * *'  # At minute 0 past every 6th hour
+  
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+  
+  # Trigger on push to main (optional, for testing)
+  push:
+    branches:
+      - main
+    paths:
+      - 'data/**'
+      - 'scripts/**'
+      - '.github/workflows/notion-sync.yml'
+
+# Prevent concurrent runs
+concurrency:
+  group: notion-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Data to Notion
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    strategy:
+      matrix:
+        node-version: [18.x]
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+      
+      - name: Cache Dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      
+      - name: Install Dependencies
+        run: |
+          npm ci --prefer-offline --no-audit
+          echo "✅ Dependencies installed successfully"
+      
+      - name: Verify Environment
+        run: |
+          echo "Node version: $(node --version)"
+          echo "NPM version: $(npm --version)"
+          echo "Working directory: $(pwd)"
+          echo "Available scripts:"
+          npm run --silent 2>&1 | grep -E "^\s+(sync|start)" || echo "  - sync commands available"
+      
+      - name: Create Logs Directory
+        run: |
+          mkdir -p logs
+          echo "📁 Logs directory created"
+      
+      - name: Run Notion Sync (with retry logic)
+        id: sync
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NODE_ENV: production
+          LOG_LEVEL: info
+        run: |
+          set +e  # Don't exit on error immediately
+          
+          MAX_RETRIES=3
+          RETRY_DELAY=30
+          ATTEMPT=1
+          SUCCESS=false
+          
+          echo "🚀 Starting Notion sync process..."
+          echo "⏰ Sync initiated at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          
+          while [ $ATTEMPT -le $MAX_RETRIES ]; do
+            echo ""
+            echo "📊 Attempt $ATTEMPT of $MAX_RETRIES"
+            echo "----------------------------------------"
+            
+            # Run the sync script
+            if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+              echo "🔍 Running in DRY-RUN mode"
+              node scripts/notion-sync.js --dry-run
+            else
+              node scripts/notion-sync.js
+            fi
+            
+            EXIT_CODE=$?
+            
+            if [ $EXIT_CODE -eq 0 ]; then
+              echo "✅ Sync completed successfully!"
+              SUCCESS=true
+              break
+            else
+              echo "❌ Sync failed with exit code: $EXIT_CODE"
+              
+              if [ $ATTEMPT -lt $MAX_RETRIES ]; then
+                echo "⏳ Waiting ${RETRY_DELAY} seconds before retry..."
+                sleep $RETRY_DELAY
+                ATTEMPT=$((ATTEMPT + 1))
+                RETRY_DELAY=$((RETRY_DELAY * 2))  # Exponential backoff
+              else
+                echo "💥 All retry attempts exhausted"
+                break
+              fi
+            fi
+          done
+          
+          echo ""
+          echo "📈 Sync Summary:"
+          echo "  - Total attempts: $ATTEMPT"
+          echo "  - Final status: $([ "$SUCCESS" = true ] && echo "SUCCESS ✅" || echo "FAILED ❌")"
+          echo "  - Completed at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          
+          # Set outputs for later steps
+          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
+          echo "attempts=$ATTEMPT" >> $GITHUB_OUTPUT
+          
+          # Exit with failure if sync didn't succeed
+          if [ "$SUCCESS" != true ]; then
+            exit 1
+          fi
+      
+      - name: Upload Sync Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-logs-${{ github.run_number }}
+          path: |
+            logs/*.log
+            data/.sync-status.json
+          retention-days: 30
+          if-no-files-found: warn
+      
+      - name: Generate Sync Report
+        if: always()
+        id: report
+        run: |
+          echo "# 📊 Sync Report" > sync-report.md
+          echo "" >> sync-report.md
+          echo "**Workflow Run:** #${{ github.run_number }}" >> sync-report.md
+          echo "**Trigger:** ${{ github.event_name }}" >> sync-report.md
+          echo "**Status:** ${{ steps.sync.outcome }}" >> sync-report.md
+          echo "**Attempts:** ${{ steps.sync.outputs.attempts }}" >> sync-report.md
+          echo "**Timestamp:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> sync-report.md
+          echo "" >> sync-report.md
+          
+          if [ -f "data/.sync-status.json" ]; then
+            echo "## 📋 Sync Status Details" >> sync-report.md
+            echo '```json' >> sync-report.md
+            cat data/.sync-status.json | head -50 >> sync-report.md
+            echo '```' >> sync-report.md
+          fi
+          
+          if [ -f "logs/sync.log" ]; then
+            echo "" >> sync-report.md
+            echo "## 📝 Recent Log Entries" >> sync-report.md
+            echo '```' >> sync-report.md
+            tail -30 logs/sync.log >> sync-report.md
+            echo '```' >> sync-report.md
+          fi
+          
+          cat sync-report.md >> $GITHUB_STEP_SUMMARY
+      
+      - name: Check for Errors in Logs
+        if: failure()
+        run: |
+          echo "🔍 Analyzing error logs..."
+          if [ -f "logs/sync-error.log" ]; then
+            echo "❌ Error log contents:"
+            cat logs/sync-error.log
+          fi
+          
+          if [ -f "logs/sync.log" ]; then
+            echo ""
+            echo "📄 Full sync log (last 50 lines):"
+            tail -50 logs/sync.log
+          fi
+  
+  notify:
+    name: Send Notifications
+    needs: sync
+    runs-on: ubuntu-latest
+    if: failure()
+    
+    steps:
+      - name: Send Failure Notification (GitHub Issue)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const issueTitle = `🚨 Notion Sync Failed - Run #${context.runNumber}`;
+            const issueBody = `
+            ## Sync Failure Alert
+            
+            The automated Notion sync has failed.
+            
+            **Details:**
+            - **Run Number:** #${context.runNumber}
+            - **Triggered by:** ${context.eventName}
+            - **Timestamp:** ${new Date().toUTCString()}
+            - **Workflow Run:** [View Details](${runUrl})
+            
+            **Possible Causes:**
+            - ❌ Invalid or expired Notion API credentials
+            - ❌ Rate limiting from Notion API
+            - ❌ Network connectivity issues
+            - ❌ Invalid data format in JSON files
+            - ❌ Database ID configuration issue
+            
+            **Recommended Actions:**
+            1. Check the [workflow logs](${runUrl}) for detailed error messages
+            2. Verify \`NOTION_API_KEY\` and \`NOTION_DATABASE_ID\` secrets are valid
+            3. Ensure the Notion integration has proper database access
+            4. Review recent data changes in the \`/data\` directory
+            5. Check Notion API status: https://status.notion.so/
+            
+            **Logs:**
+            Sync logs are available as artifacts in the [workflow run](${runUrl}).
+            
+            ---
+            *This issue was automatically created by the Notion Sync workflow.*
+            `;
+            
+            // Check if there's already an open issue for sync failures
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'automated-sync,bug',
+              per_page: 5
+            });
+            
+            const existingIssue = issues.data.find(issue => 
+              issue.title.includes('Notion Sync Failed')
+            );
+            
+            if (existingIssue) {
+              // Add a comment to existing issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: `**Another sync failure occurred:**\n\n${issueBody}`
+              });
+              console.log(`Updated existing issue #${existingIssue.number}`);
+            } else {
+              // Create a new issue
+              const issue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: issueBody,
+                labels: ['automated-sync', 'bug', 'needs-investigation']
+              });
+              console.log(`Created new issue #${issue.data.number}`);
+            }
+      
+      - name: Send Slack Notification (Optional)
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK_URL" ]; then
+            curl -X POST "$SLACK_WEBHOOK_URL" \
+              -H 'Content-Type: application/json' \
+              -d "{
+                \"text\": \"🚨 Notion Sync Failed\",
+                \"blocks\": [
+                  {
+                    \"type\": \"header\",
+                    \"text\": {
+                      \"type\": \"plain_text\",
+                      \"text\": \"🚨 Notion Sync Failed\"
+                    }
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"fields\": [
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"*Repository:*\n${{ github.repository }}\"
+                      },
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"*Run Number:*\n#${{ github.run_number }}\"
+                      },
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"*Triggered by:*\n${{ github.event_name }}\"
+                      },
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"*Time:*\n$(date -u '+%Y-%m-%d %H:%M:%S UTC')\"
+                      }
+                    ]
+                  },
+                  {
+                    \"type\": \"actions\",
+                    \"elements\": [
+                      {
+                        \"type\": \"button\",
+                        \"text\": {
+                          \"type\": \"plain_text\",
+                          \"text\": \"View Logs\"
+                        },
+                        \"url\": \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+                      }
+                    ]
+                  }
+                ]
+              }"
+            echo "✅ Slack notification sent"
+          else
+            echo "ℹ️  Slack webhook not configured, skipping notification"
+          fi
+  
+  success-summary:
+    name: Success Summary
+    needs: sync
+    runs-on: ubuntu-latest
+    if: success()
+    
+    steps:
+      - name: Log Success
+        run: |
+          echo "✅ Notion sync completed successfully!"
+          echo "📊 Run #${{ github.run_number }}"
+          echo "⏰ Completed at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "🎯 Next scheduled run: In 6 hours"
