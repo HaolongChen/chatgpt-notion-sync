@@ -1,10 +1,14 @@
 {
   "lastSyncRun": {
-    "timestamp": "2025-12-12T04:00:00-05:00",
+    "timestamp": "2025-12-12T12:00:00.000Z",
     "date": "December 12, 2025",
-    "time": "4:00 AM EST",
+    "time": "7:00 AM EST",
     "status": "completed",
     "checks": {
+      "insightFiles": {
+        "status": "verified",
+        "description": "Checked for new/updated insight files and confirmed all data is current"
+      },
       "dataDirectory": {
         "status": "verified",
         "description": "Data directory structure checked and validated"
@@ -16,10 +20,17 @@
     },
     "automation": {
       "triggered": "scheduled",
-      "type": "sync"
+      "type": "sync_check"
     }
   },
   "syncHistory": [
+    {
+      "timestamp": "2025-12-12T12:00:00.000Z",
+      "status": "completed",
+      "description": "Sync check performed: Checked for new/updated insight files and confirmed all data is current",
+      "insightFilesCheck": "passed",
+      "dataCurrentStatus": "verified"
+    },
     {
       "timestamp": "2025-12-12T04:00:00-05:00",
       "status": "completed",
