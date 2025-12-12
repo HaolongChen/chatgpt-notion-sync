@@ -52,12 +52,26 @@ jobs:
       
       - name: Sync to Poke API
         env:
+          # Required: API Key (stored as GitHub Secret)
           POKE_API_KEY: ${{ secrets.POKE_API_KEY }}
+          
+          # Optional: API Endpoint
           POKE_API_ENDPOINT: ${{ secrets.POKE_API_ENDPOINT || 'https://api.poke.example.com/v1/insights' }}
-          POKE_MAX_RETRIES: ${{ vars.POKE_MAX_RETRIES || '3' }}
+          POKE_API_BASE_URL: ${{ secrets.POKE_API_BASE_URL || secrets.POKE_API_ENDPOINT || 'https://api.poke.example.com' }}
+          
+          # Retry Configuration
+          POKE_API_MAX_RETRIES: ${{ vars.POKE_MAX_RETRIES || '3' }}
           POKE_INITIAL_BACKOFF: ${{ vars.POKE_INITIAL_BACKOFF || '1.0' }}
           POKE_MAX_BACKOFF: ${{ vars.POKE_MAX_BACKOFF || '60.0' }}
           POKE_BACKOFF_MULTIPLIER: ${{ vars.POKE_BACKOFF_MULTIPLIER || '2.0' }}
+          
+          # Circuit Breaker Configuration
+          POKE_API_CIRCUIT_BREAKER_THRESHOLD: ${{ vars.POKE_API_CIRCUIT_BREAKER_THRESHOLD || '5' }}
+          POKE_API_CIRCUIT_BREAKER_TIMEOUT: ${{ vars.POKE_API_CIRCUIT_BREAKER_TIMEOUT || '60' }}
+          
+          # Rate Limiting
+          POKE_API_RATE_LIMIT: ${{ vars.POKE_API_RATE_LIMIT || '60' }}
+          POKE_API_TIMEOUT: ${{ vars.POKE_API_TIMEOUT || '30' }}
         run: |
           # Build command with optional flags
           CMD="python scripts/poke_integration.py"
@@ -75,6 +89,10 @@ jobs:
           fi
           
           echo "Running: $CMD"
+          echo "Configuration:"
+          echo "  - Max Retries: $POKE_API_MAX_RETRIES"
+          echo "  - Circuit Breaker Threshold: $POKE_API_CIRCUIT_BREAKER_THRESHOLD"
+          echo "  - Rate Limit: $POKE_API_RATE_LIMIT req/min"
           $CMD
       
       - name: Upload logs
@@ -111,6 +129,11 @@ jobs:
 **Triggered by:** ${{ github.event_name }}
 **Time:** ${{ github.event.head_commit.timestamp }}
 
+### Configuration
+- Max Retries: ${{ vars.POKE_MAX_RETRIES || '3' }}
+- Circuit Breaker Threshold: ${{ vars.POKE_API_CIRCUIT_BREAKER_THRESHOLD || '5' }}
+- Rate Limit: ${{ vars.POKE_API_RATE_LIMIT || '60' }} req/min
+
 ### Log Excerpt (last 50 lines)
 \`\`\`
 ${logContent}
@@ -132,6 +155,13 @@ Please check the full logs in the workflow artifacts for more details.
         if: always()
         run: |
           echo "## Poke API Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Max Retries:** $POKE_API_MAX_RETRIES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Circuit Breaker Threshold:** $POKE_API_CIRCUIT_BREAKER_THRESHOLD" >> $GITHUB_STEP_SUMMARY
+          echo "- **Circuit Breaker Timeout:** ${POKE_API_CIRCUIT_BREAKER_TIMEOUT}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Rate Limit:** $POKE_API_RATE_LIMIT req/min" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f "data/.poke-sync-status.json" ]; then
