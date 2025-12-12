@@ -1,0 +1,178 @@
+name: Poke API Sync
+
+on:
+  # Run on schedule (every 6 hours)
+  schedule:
+    - cron: '0 */6 * * *'
+  
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force sync all conversations (even already synced)'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry run mode (preview without sending)'
+        required: false
+        type: boolean
+        default: false
+      log_level:
+        description: 'Log level'
+        required: false
+        type: choice
+        options:
+          - INFO
+          - DEBUG
+          - WARNING
+          - ERROR
+        default: INFO
+
+jobs:
+  sync-to-poke:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install requests
+      
+      - name: Create logs directory
+        run: mkdir -p logs
+      
+      - name: Sync to Poke API
+        env:
+          # Required: API Key (stored as GitHub Secret)
+          POKE_API_KEY: ${{ secrets.POKE_API_KEY }}
+          
+          # Optional: API Endpoint
+          POKE_API_ENDPOINT: ${{ secrets.POKE_API_ENDPOINT || 'https://api.poke.example.com/v1/insights' }}
+          POKE_API_BASE_URL: ${{ secrets.POKE_API_BASE_URL || secrets.POKE_API_ENDPOINT || 'https://api.poke.example.com' }}
+          
+          # Retry Configuration
+          POKE_API_MAX_RETRIES: ${{ vars.POKE_MAX_RETRIES || '3' }}
+          POKE_INITIAL_BACKOFF: ${{ vars.POKE_INITIAL_BACKOFF || '1.0' }}
+          POKE_MAX_BACKOFF: ${{ vars.POKE_MAX_BACKOFF || '60.0' }}
+          POKE_BACKOFF_MULTIPLIER: ${{ vars.POKE_BACKOFF_MULTIPLIER || '2.0' }}
+          
+          # Circuit Breaker Configuration
+          POKE_API_CIRCUIT_BREAKER_THRESHOLD: ${{ vars.POKE_API_CIRCUIT_BREAKER_THRESHOLD || '5' }}
+          POKE_API_CIRCUIT_BREAKER_TIMEOUT: ${{ vars.POKE_API_CIRCUIT_BREAKER_TIMEOUT || '60' }}
+          
+          # Rate Limiting
+          POKE_API_RATE_LIMIT: ${{ vars.POKE_API_RATE_LIMIT || '60' }}
+          POKE_API_TIMEOUT: ${{ vars.POKE_API_TIMEOUT || '30' }}
+        run: |
+          # Build command with optional flags
+          CMD="python scripts/poke_integration.py"
+          
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            CMD="$CMD --force"
+          fi
+          
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            CMD="$CMD --dry-run"
+          fi
+          
+          if [ -n "${{ github.event.inputs.log_level }}" ]; then
+            CMD="$CMD --log-level ${{ github.event.inputs.log_level }}"
+          fi
+          
+          echo "Running: $CMD"
+          echo "Configuration:"
+          echo "  - Max Retries: $POKE_API_MAX_RETRIES"
+          echo "  - Circuit Breaker Threshold: $POKE_API_CIRCUIT_BREAKER_THRESHOLD"
+          echo "  - Rate Limit: $POKE_API_RATE_LIMIT req/min"
+          $CMD
+      
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: poke-api-logs-${{ github.run_number }}
+          path: |
+            logs/poke_api.log
+            logs/poke_integration.log
+            data/.poke-sync-status.json
+          retention-days: 30
+      
+      - name: Comment on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let logContent = '';
+            try {
+              logContent = fs.readFileSync('logs/poke_api.log', 'utf8');
+              // Get last 50 lines
+              const lines = logContent.split('\n');
+              logContent = lines.slice(-50).join('\n');
+            } catch (error) {
+              logContent = 'Could not read log file';
+            }
+            
+            const body = `## ⚠️ Poke API Sync Failed
+            
+**Workflow Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+**Triggered by:** ${{ github.event_name }}
+**Time:** ${{ github.event.head_commit.timestamp }}
+
+### Configuration
+- Max Retries: ${{ vars.POKE_MAX_RETRIES || '3' }}
+- Circuit Breaker Threshold: ${{ vars.POKE_API_CIRCUIT_BREAKER_THRESHOLD || '5' }}
+- Rate Limit: ${{ vars.POKE_API_RATE_LIMIT || '60' }} req/min
+
+### Log Excerpt (last 50 lines)
+\`\`\`
+${logContent}
+\`\`\`
+
+Please check the full logs in the workflow artifacts for more details.
+            `;
+            
+            // Create an issue if sync fails
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Auto] Poke API Sync Failed - ${new Date().toISOString().split('T')[0]}`,
+              body: body,
+              labels: ['bug', 'automation', 'poke-api']
+            });
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Poke API Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Max Retries:** $POKE_API_MAX_RETRIES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Circuit Breaker Threshold:** $POKE_API_CIRCUIT_BREAKER_THRESHOLD" >> $GITHUB_STEP_SUMMARY
+          echo "- **Circuit Breaker Timeout:** ${POKE_API_CIRCUIT_BREAKER_TIMEOUT}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Rate Limit:** $POKE_API_RATE_LIMIT req/min" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "data/.poke-sync-status.json" ]; then
+            echo "### Sync Status" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat data/.poke-sync-status.json | jq '.sync_history[-1]' >> $GITHUB_STEP_SUMMARY || echo "Could not parse status file" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ No sync status file found" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Logs" >> $GITHUB_STEP_SUMMARY
+          echo "Log artifacts have been uploaded and will be available for 30 days." >> $GITHUB_STEP_SUMMARY
