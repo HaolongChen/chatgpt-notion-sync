@@ -10,8 +10,6 @@
  */
 
 require('dotenv').config();
-const path = require('path');
-const fs = require('fs').promises;
 const logger = require('./utils/logger');
 const { loadConfig } = require('./utils/configLoader');
 const { DataTransformer } = require('./services/dataTransformer');
