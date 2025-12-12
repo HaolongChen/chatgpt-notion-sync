@@ -14,6 +14,7 @@ ChatGPT-Notion Sync is an automated synchronization tool that bridges ChatGPT co
 - 🔍 Full-text search capabilities in Notion
 - 📅 Timestamped conversation history
 - 🔐 Secure API integration with both platforms
+- 🚀 **NEW: Poke API integration with robust retry logic**
 
 ### Use Cases
 
@@ -22,15 +23,18 @@ ChatGPT-Notion Sync is an automated synchronization tool that bridges ChatGPT co
 - Research and conversation analysis
 - AI interaction documentation
 - Learning and educational purposes
+- **Data export to external analytics platforms via Poke API**
 
 ## 🚀 Setup Instructions
 
 ### Prerequisites
 
 - Python 3.8 or higher
+- Node.js 18.0 or higher
 - ChatGPT account with API access
 - Notion account with integration access
 - Git (for cloning the repository)
+- **Poke API key** (for Poke integration)
 
 ### Installation
 
@@ -42,7 +46,11 @@ ChatGPT-Notion Sync is an automated synchronization tool that bridges ChatGPT co
 
 2. **Install dependencies**
    ```bash
-   pip install -r requirements.txt
+   # Node.js dependencies
+   npm install
+   
+   # Python dependencies (for Poke API integration)
+   pip install requests
    ```
 
 3. **Set up environment variables**
@@ -57,6 +65,7 @@ ChatGPT-Notion Sync is an automated synchronization tool that bridges ChatGPT co
    OPENAI_API_KEY=your_openai_api_key_here
    NOTION_API_KEY=your_notion_integration_token_here
    NOTION_DATABASE_ID=your_notion_database_id_here
+   POKE_API_KEY=your_poke_api_key_here
    ```
 
 4. **Configure Notion Database**
@@ -72,49 +81,105 @@ ChatGPT-Notion Sync is an automated synchronization tool that bridges ChatGPT co
 
 5. **Run the sync**
    ```bash
-   python main.py
+   # Sync to Notion
+   node scripts/notion-sync.js
+   
+   # Send to Poke API
+   python scripts/poke_integration.py
    ```
 
 ## 📖 Usage
 
 ### Basic Sync
 ```bash
-# Sync all new conversations
-python main.py --sync-all
+# Sync all new conversations to Notion
+node scripts/notion-sync.js
 
-# Sync conversations from a specific date
-python main.py --from-date 2025-01-01
+# Sync to Poke API
+python scripts/poke_integration.py
 
-# Sync specific conversation by ID
-python main.py --conversation-id <conv_id>
+# Dry run (preview without sending)
+python scripts/poke_integration.py --dry-run
+
+# Force sync all conversations
+python scripts/poke_integration.py --force
 ```
 
 ### Configuration Options
 
-Edit `config.yaml` to customize:
+Edit `config/default.json` to customize:
 - Sync frequency
 - Filter criteria
 - Analysis parameters
 - Notion formatting preferences
+- Retry logic parameters
+
+## 🔌 Poke API Integration
+
+The Poke API integration allows you to send processed insights to external analytics platforms.
+
+### Features
+
+✅ **Exponential Backoff Retry Logic**: Automatically retries failed requests with increasing delays  
+✅ **Comprehensive Error Handling**: Handles network errors, rate limits, and API errors gracefully  
+✅ **Configurable Parameters**: Customize API endpoint, retry attempts, timeouts, and more  
+✅ **Detailed Logging**: Track all API interactions with comprehensive logs  
+✅ **Batch Processing**: Send multiple conversations efficiently  
+✅ **Sync Status Tracking**: Avoid duplicate sends with automatic status tracking  
+✅ **GitHub Secrets Integration**: Secure API key management  
+
+### Quick Start
+
+1. **Set up your Poke API key**:
+   ```bash
+   export POKE_API_KEY="your_api_key_here"
+   ```
+
+2. **Send insights to Poke API**:
+   ```bash
+   python scripts/poke_integration.py
+   ```
+
+3. **Check logs**:
+   ```bash
+   cat logs/poke_api.log
+   ```
+
+### Configuration
+
+Customize via environment variables:
+
+```bash
+# API Configuration
+export POKE_API_ENDPOINT="https://api.poke.example.com/v1/insights"
+export POKE_API_TIMEOUT=30
+
+# Retry Configuration
+export POKE_MAX_RETRIES=5
+export POKE_INITIAL_BACKOFF=1.0
+export POKE_MAX_BACKOFF=60.0
+export POKE_BACKOFF_MULTIPLIER=2.0
+```
+
+For detailed documentation, see [docs/POKE_API_INTEGRATION.md](docs/POKE_API_INTEGRATION.md).
 
 ## 🔧 Configuration
 
-Example `config.yaml`:
-```yaml
-sync:
-  interval: 3600  # Sync every hour
-  batch_size: 50
-  
-filters:
-  min_length: 100  # Minimum conversation length
-  categories:
-    - "technical"
-    - "creative"
-    - "research"
-
-notion:
-  page_format: "rich_text"
-  include_metadata: true
+Example `config/default.json`:
+```json
+{
+  "sync": {
+    "batchSize": 10,
+    "intervalMs": 300000,
+    "enableScheduledSync": false
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "initialDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "backoffMultiplier": 2
+  }
+}
 ```
 
 ## 🤝 Contributing
@@ -135,11 +200,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [OpenAI API Documentation](https://platform.openai.com/docs)
 - [Notion API Documentation](https://developers.notion.com)
+- [Poke API Integration Documentation](docs/POKE_API_INTEGRATION.md)
 - [Project Issues](https://github.com/HaolongChen/chatgpt-notion-sync/issues)
 
 ## ⚠️ Disclaimer
 
-This tool is for personal and educational use. Please ensure you comply with OpenAI's and Notion's terms of service when using this integration.
+This tool is for personal and educational use. Please ensure you comply with OpenAI's, Notion's, and Poke's terms of service when using this integration.
 
 ## 📧 Contact
 
