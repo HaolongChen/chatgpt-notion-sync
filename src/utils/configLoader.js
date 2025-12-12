@@ -10,13 +10,15 @@
  */
 
 const config = require('config');
-const logger = require('./logger');
 
 /**
  * Load and validate configuration
  * @returns {Object} Merged configuration object
  */
 async function loadConfig() {
+  // Lazy load logger to avoid circular dependency
+  const logger = require('./logger');
+  
   try {
     const appConfig = {
       sync: config.get('sync'),
@@ -49,7 +51,8 @@ async function loadConfig() {
 
     return appConfig;
   } catch (error) {
-    logger.error('Failed to load configuration', { error: error.message });
+    // Use console for error since logger might not be available
+    console.error('Failed to load configuration:', error.message);
     throw error;
   }
 }
@@ -61,6 +64,9 @@ async function loadConfig() {
  * @returns {*} Configuration value
  */
 function getConfigValue(key, defaultValue = null) {
+  // Lazy load logger to avoid circular dependency
+  const logger = require('./logger');
+  
   try {
     return config.has(key) ? config.get(key) : defaultValue;
   } catch (error) {
