@@ -13,7 +13,7 @@
 
 const logger = require('../utils/logger');
 const { TransformationError } = require('../utils/errors');
-const { truncate, getNestedValue } = require('../utils/helpers');
+const { truncate } = require('../utils/helpers');
 
 class DataTransformer {
   constructor(config = {}) {
