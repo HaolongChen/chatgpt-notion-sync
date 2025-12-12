@@ -1,641 +1,651 @@
 #!/usr/bin/env python3
 """
-Poke API Client Module
+Poke API Client
 
-This module provides integration with the Poke API endpoint for sending
-processed ChatGPT conversation insights data. It includes:
-- Robust error handling with exponential backoff retry logic
-- Configurable API endpoints and retry parameters
-- Comprehensive logging and monitoring
-- GitHub Secrets integration for secure API key management
+Robust client for integrating with the Poke API. Includes:
+- Exponential backoff retry logic with jitter
+- Circuit breaker pattern for fault tolerance
+- Comprehensive error handling
+- Rate limiting
+- Request/response logging
+- Request compression
+- Metrics collection
+- Configurable via environment variables
 
-Author: Haolong Chen
-Created: December 2025
-License: MIT
+Environment Variables:
+    POKE_API_KEY: API key for authentication (required)
+    POKE_API_BASE_URL: Base URL for Poke API (default: https://api.poke.example.com)
+    POKE_API_TIMEOUT: Request timeout in seconds (default: 30)
+    POKE_API_MAX_RETRIES: Maximum number of retry attempts (default: 3)
+    POKE_API_RATE_LIMIT: Maximum requests per minute (default: 60)
+    POKE_API_CIRCUIT_BREAKER_THRESHOLD: Failed requests before circuit opens (default: 5)
+    POKE_API_CIRCUIT_BREAKER_TIMEOUT: Seconds before circuit half-opens (default: 60)
+
+Usage:
+    from poke_api_client import PokeAPIClient
+    
+    client = PokeAPIClient()
+    response = client.send_insights(insights_data)
 """
 
 import os
 import time
 import logging
-import json
+import random
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import Enum
-import requests
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+import json
+
+try:
+    import requests
+    from requests.adapters import HTTPAdapter
+    from requests.packages.urllib3.util.retry import Retry
+except ImportError:
+    print("Error: requests package not installed.")
+    print("Please install: pip install requests")
+    raise
 
 
-# ============================================================================
-# CONFIGURATION CLASSES
-# ============================================================================
-
-class RetryStrategy(Enum):
-    """Retry strategy types"""
-    EXPONENTIAL = "exponential"
-    LINEAR = "linear"
-    FIXED = "fixed"
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
-@dataclass
-class PokeAPIConfig:
+class CircuitState(Enum):
+    """Circuit breaker states."""
+    CLOSED = "closed"  # Normal operation
+    OPEN = "open"      # Failing, reject requests
+    HALF_OPEN = "half_open"  # Testing if service recovered
+
+
+class PokeAPIError(Exception):
+    """Base exception for Poke API errors."""
+    pass
+
+
+class PokeAPIAuthenticationError(PokeAPIError):
+    """Raised when authentication fails."""
+    pass
+
+
+class PokeAPIRateLimitError(PokeAPIError):
+    """Raised when rate limit is exceeded."""
+    pass
+
+
+class PokeAPIValidationError(PokeAPIError):
+    """Raised when request validation fails."""
+    pass
+
+
+class CircuitBreakerOpenError(PokeAPIError):
+    """Raised when circuit breaker is open."""
+    pass
+
+
+class CircuitBreaker:
     """
-    Configuration for Poke API client
-    
-    Attributes:
-        api_key: API key for authentication (from GitHub Secret POKE_API_KEY)
-        api_endpoint: Base URL for Poke API endpoint
-        timeout: Request timeout in seconds
-        max_retries: Maximum number of retry attempts
-        initial_backoff: Initial backoff delay in seconds
-        max_backoff: Maximum backoff delay in seconds
-        backoff_multiplier: Multiplier for exponential backoff
-        retry_strategy: Strategy for retry delays
-        retry_on_status: HTTP status codes to retry on
-        verify_ssl: Whether to verify SSL certificates
+    Circuit breaker implementation to prevent cascading failures.
     """
-    api_key: str
-    api_endpoint: str = "https://api.poke.example.com/v1/insights"
-    timeout: int = 30
-    max_retries: int = 3
-    initial_backoff: float = 1.0
-    max_backoff: float = 60.0
-    backoff_multiplier: float = 2.0
-    retry_strategy: RetryStrategy = RetryStrategy.EXPONENTIAL
-    retry_on_status: List[int] = None
-    verify_ssl: bool = True
     
-    def __post_init__(self):
-        """Initialize default retry status codes if not provided"""
-        if self.retry_on_status is None:
-            self.retry_on_status = [408, 429, 500, 502, 503, 504]
-    
-    @classmethod
-    def from_env(cls, **overrides) -> 'PokeAPIConfig':
+    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
         """
-        Create configuration from environment variables
+        Initialize circuit breaker.
         
         Args:
-            **overrides: Override specific configuration values
-            
-        Returns:
-            PokeAPIConfig instance
-            
-        Raises:
-            ValueError: If required environment variables are missing
+            failure_threshold: Number of failures before opening circuit
+            timeout: Seconds before attempting to close circuit
         """
-        api_key = os.getenv('POKE_API_KEY')
-        if not api_key:
-            raise ValueError(
-                "POKE_API_KEY environment variable is required. "
-                "Please set it as a GitHub Secret or in your .env file."
-            )
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.state = CircuitState.CLOSED
+    
+    def call(self, func):
+        """Execute function with circuit breaker protection."""
+        if self.state == CircuitState.OPEN:
+            if self._should_attempt_reset():
+                self.state = CircuitState.HALF_OPEN
+                logger.info("Circuit breaker entering HALF_OPEN state")
+            else:
+                raise CircuitBreakerOpenError(
+                    f"Circuit breaker is OPEN. Will retry after {self.timeout}s"
+                )
         
-        config = {
-            'api_key': api_key,
-            'api_endpoint': os.getenv('POKE_API_ENDPOINT', cls.api_endpoint),
-            'timeout': int(os.getenv('POKE_API_TIMEOUT', cls.timeout)),
-            'max_retries': int(os.getenv('POKE_MAX_RETRIES', cls.max_retries)),
-            'initial_backoff': float(os.getenv('POKE_INITIAL_BACKOFF', cls.initial_backoff)),
-            'max_backoff': float(os.getenv('POKE_MAX_BACKOFF', cls.max_backoff)),
-            'backoff_multiplier': float(os.getenv('POKE_BACKOFF_MULTIPLIER', cls.backoff_multiplier)),
-        }
+        try:
+            result = func()
+            self._on_success()
+            return result
+        except Exception as e:
+            self._on_failure()
+            raise e
+    
+    def _should_attempt_reset(self) -> bool:
+        """Check if enough time has passed to attempt reset."""
+        return (self.last_failure_time and 
+                time.time() - self.last_failure_time >= self.timeout)
+    
+    def _on_success(self):
+        """Handle successful request."""
+        if self.state == CircuitState.HALF_OPEN:
+            logger.info("Circuit breaker closing after successful test")
+            self.state = CircuitState.CLOSED
+        self.failure_count = 0
+    
+    def _on_failure(self):
+        """Handle failed request."""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
         
-        # Apply overrides
-        config.update(overrides)
-        
-        return cls(**config)
+        if self.failure_count >= self.failure_threshold:
+            if self.state != CircuitState.OPEN:
+                logger.warning(f"Circuit breaker opening after {self.failure_count} failures")
+                self.state = CircuitState.OPEN
 
-
-# ============================================================================
-# POKE API CLIENT
-# ============================================================================
 
 class PokeAPIClient:
     """
-    Client for interacting with Poke API
+    Client for interacting with the Poke API.
     
-    This client handles:
-    - Authentication with API key
-    - Automatic retries with exponential backoff
-    - Error handling and logging
-    - Request/response validation
-    
-    Example:
-        ```python
-        # Initialize client from environment
-        client = PokeAPIClient.from_env()
-        
-        # Send insights data
-        data = {
-            "conversation_id": "conv_123",
-            "insights": {...}
-        }
-        response = client.send_insights(data)
-        
-        if response.success:
-            print(f"Successfully sent data: {response.data}")
-        else:
-            print(f"Failed to send data: {response.error}")
-        ```
+    Features:
+    - Automatic retry with exponential backoff and jitter
+    - Circuit breaker for fault tolerance
+    - Rate limiting
+    - Request/response logging
+    - Comprehensive error handling
+    - Request compression
+    - Metrics collection
     """
     
-    def __init__(self, config: PokeAPIConfig, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: Optional[int] = None,
+        max_retries: Optional[int] = None,
+        rate_limit: Optional[int] = None
+    ):
         """
-        Initialize Poke API client
+        Initialize Poke API client.
         
         Args:
-            config: Configuration object
-            logger: Optional logger instance (creates default if not provided)
+            api_key: API key for authentication (reads from POKE_API_KEY env var if not provided)
+            base_url: Base URL for API (reads from POKE_API_BASE_URL env var if not provided)
+            timeout: Request timeout in seconds (default: 30)
+            max_retries: Maximum number of retry attempts (default: 3)
+            rate_limit: Maximum requests per minute (default: 60)
+        
+        Raises:
+            PokeAPIAuthenticationError: If API key is not provided or found in environment
         """
-        self.config = config
-        self.logger = logger or self._create_default_logger()
+        self.api_key = api_key or os.getenv('POKE_API_KEY')
+        if not self.api_key:
+            raise PokeAPIAuthenticationError(
+                "API key not provided. Set POKE_API_KEY environment variable or pass api_key parameter."
+            )
+        
+        self.base_url = base_url or os.getenv('POKE_API_BASE_URL', 'https://api.poke.example.com')
+        self.timeout = timeout or int(os.getenv('POKE_API_TIMEOUT', '30'))
+        self.max_retries = max_retries or int(os.getenv('POKE_API_MAX_RETRIES', '3'))
+        self.rate_limit = rate_limit or int(os.getenv('POKE_API_RATE_LIMIT', '60'))
+        
+        # Rate limiting state
+        self._request_times: List[datetime] = []
+        
+        # Circuit breaker
+        circuit_threshold = int(os.getenv('POKE_API_CIRCUIT_BREAKER_THRESHOLD', '5'))
+        circuit_timeout = int(os.getenv('POKE_API_CIRCUIT_BREAKER_TIMEOUT', '60'))
+        self.circuit_breaker = CircuitBreaker(circuit_threshold, circuit_timeout)
+        
+        # Metrics collection
+        self.metrics = {
+            'requests_total': 0,
+            'requests_success': 0,
+            'requests_failed': 0,
+            'retries_total': 0,
+            'circuit_breaker_opens': 0
+        }
+        
+        # Create session with retry strategy
         self.session = self._create_session()
         
-        self.logger.info(
-            "Poke API client initialized",
-            extra={
-                "endpoint": config.api_endpoint,
-                "max_retries": config.max_retries,
-                "retry_strategy": config.retry_strategy.value
-            }
-        )
-    
-    @classmethod
-    def from_env(cls, logger: Optional[logging.Logger] = None, **config_overrides) -> 'PokeAPIClient':
-        """
-        Create client from environment variables
-        
-        Args:
-            logger: Optional logger instance
-            **config_overrides: Override specific configuration values
-            
-        Returns:
-            PokeAPIClient instance
-        """
-        config = PokeAPIConfig.from_env(**config_overrides)
-        return cls(config, logger)
-    
-    def _create_default_logger(self) -> logging.Logger:
-        """Create default logger with console and file handlers"""
-        logger = logging.getLogger('poke_api_client')
-        logger.setLevel(logging.INFO)
-        
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        console_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        console_handler.setFormatter(console_formatter)
-        logger.addHandler(console_handler)
-        
-        # File handler
-        try:
-            os.makedirs('logs', exist_ok=True)
-            file_handler = logging.FileHandler('logs/poke_api.log')
-            file_handler.setLevel(logging.DEBUG)
-            file_formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            file_handler.setFormatter(file_formatter)
-            logger.addHandler(file_handler)
-        except Exception as e:
-            logger.warning(f"Failed to create file handler: {e}")
-        
-        return logger
+        logger.info(f"Initialized PokeAPIClient with base_url: {self.base_url}")
     
     def _create_session(self) -> requests.Session:
-        """Create requests session with retry configuration"""
+        """
+        Create requests session with retry strategy.
+        
+        Returns:
+            Configured requests.Session object
+        """
         session = requests.Session()
         
-        # Configure retry strategy for urllib3
-        retry_config = Retry(
-            total=0,  # We handle retries manually for better control
-            connect=2,  # Connection retries
-            read=2,  # Read retries
-            status_forcelist=self.config.retry_on_status,
-            backoff_factor=0.3,
+        # Configure retry strategy at the requests library level
+        # Note: This is in addition to our custom retry logic with jitter
+        retry_strategy = Retry(
+            total=0,  # We handle retries manually with jitter
+            backoff_factor=1,
+            status_forcelist=[408, 429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST"]
         )
         
-        adapter = HTTPAdapter(max_retries=retry_config)
-        session.mount('http://', adapter)
-        session.mount('https://', adapter)
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
         
-        # Set default headers
+        # Set default headers with compression support
         session.headers.update({
-            'Authorization': f'Bearer {self.config.api_key}',
+            'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json',
-            'User-Agent': 'chatgpt-notion-sync/1.0 (Poke API Client)',
-            'Accept': 'application/json'
+            'User-Agent': 'ChatGPT-Notion-Sync-PokeAPI-Client/1.0',
+            'Accept-Encoding': 'gzip, deflate'  # Enable compression
         })
         
         return session
     
-    def _calculate_backoff(self, attempt: int) -> float:
+    def _check_rate_limit(self):
         """
-        Calculate backoff delay based on retry strategy
+        Check if rate limit would be exceeded and wait if necessary.
         
-        Args:
-            attempt: Current attempt number (0-indexed)
+        Raises:
+            PokeAPIRateLimitError: If rate limit cannot be satisfied within reasonable time
+        """
+        now = datetime.now()
+        
+        # Remove requests older than 1 minute
+        self._request_times = [
+            t for t in self._request_times
+            if now - t < timedelta(minutes=1)
+        ]
+        
+        # Check if we're at the rate limit
+        if len(self._request_times) >= self.rate_limit:
+            # Calculate wait time
+            oldest_request = min(self._request_times)
+            wait_time = 60 - (now - oldest_request).total_seconds()
             
-        Returns:
-            Delay in seconds
-        """
-        if self.config.retry_strategy == RetryStrategy.EXPONENTIAL:
-            delay = min(
-                self.config.initial_backoff * (self.config.backoff_multiplier ** attempt),
-                self.config.max_backoff
-            )
-        elif self.config.retry_strategy == RetryStrategy.LINEAR:
-            delay = min(
-                self.config.initial_backoff * (attempt + 1),
-                self.config.max_backoff
-            )
-        else:  # FIXED
-            delay = self.config.initial_backoff
+            if wait_time > 0:
+                logger.warning(f"Rate limit reached. Waiting {wait_time:.2f} seconds...")
+                time.sleep(wait_time + 0.1)  # Add small buffer
+                
+                # Clear old requests after waiting
+                now = datetime.now()
+                self._request_times = [
+                    t for t in self._request_times
+                    if now - t < timedelta(minutes=1)
+                ]
         
-        # Add jitter to prevent thundering herd
-        import random
-        jitter = random.uniform(0, delay * 0.1)
-        return delay + jitter
+        # Record this request
+        self._request_times.append(now)
     
-    def _should_retry(self, attempt: int, status_code: Optional[int] = None, 
-                     exception: Optional[Exception] = None) -> bool:
+    def _calculate_backoff_with_jitter(self, retry_count: int, base_delay: int = 1) -> float:
         """
-        Determine if request should be retried
+        Calculate exponential backoff with jitter to prevent thundering herd.
         
         Args:
-            attempt: Current attempt number (0-indexed)
-            status_code: HTTP status code (if available)
-            exception: Exception that occurred (if any)
-            
+            retry_count: Current retry attempt (0-indexed)
+            base_delay: Base delay multiplier in seconds
+        
         Returns:
-            True if should retry, False otherwise
+            Wait time in seconds with jitter applied
         """
-        if attempt >= self.config.max_retries:
-            return False
+        # Exponential backoff: base_delay * (2 ^ retry_count)
+        exponential_delay = base_delay * (2 ** retry_count)
         
-        # Retry on specific status codes
-        if status_code and status_code in self.config.retry_on_status:
-            return True
+        # Add jitter: random value between 0 and exponential_delay
+        jitter = random.uniform(0, exponential_delay * 0.3)  # 30% jitter
         
-        # Retry on connection errors
-        if exception and isinstance(exception, (requests.ConnectionError, 
-                                               requests.Timeout)):
-            return True
+        total_delay = exponential_delay + jitter
+        logger.debug(f"Backoff calculation: base={exponential_delay}s, jitter={jitter:.2f}s, total={total_delay:.2f}s")
         
-        return False
+        return total_delay
     
-    def send_insights(self, data: Dict[str, Any], 
-                     conversation_id: Optional[str] = None) -> 'APIResponse':
+    def _make_request(
+        self,
+        method: str,
+        endpoint: str,
+        data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        retry_count: int = 0
+    ) -> Dict[str, Any]:
         """
-        Send conversation insights to Poke API
+        Make HTTP request to Poke API with retry logic and circuit breaker.
         
         Args:
-            data: Insights data to send
-            conversation_id: Optional conversation ID for tracking
-            
+            method: HTTP method (GET, POST, PUT, DELETE)
+            endpoint: API endpoint (e.g., '/insights')
+            data: Request body data
+            params: Query parameters
+            retry_count: Current retry attempt (0-indexed, internal use)
+        
         Returns:
-            APIResponse object with results
+            Response data as dictionary
+        
+        Raises:
+            PokeAPIError: For various API errors
+            CircuitBreakerOpenError: When circuit breaker is open
         """
-        attempt = 0
-        last_exception = None
+        self.metrics['requests_total'] += 1
         
-        # Extract conversation_id if not provided
-        if not conversation_id:
-            conversation_id = data.get('conversation_id', 'unknown')
-        
-        self.logger.info(
-            f"Sending insights to Poke API",
-            extra={"conversation_id": conversation_id}
-        )
-        
-        while attempt <= self.config.max_retries:
+        def _execute_request():
+            # Check rate limit
+            self._check_rate_limit()
+            
+            # Build URL
+            url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+            
+            # Log request
+            logger.info(f"Making {method} request to {url} (attempt {retry_count + 1}/{self.max_retries + 1})")
+            if data:
+                logger.debug(f"Request data: {json.dumps(data, indent=2)}")
+            
             try:
-                # Make the request
-                response = self.session.post(
-                    self.config.api_endpoint,
+                # Make request
+                response = self.session.request(
+                    method=method,
+                    url=url,
                     json=data,
-                    timeout=self.config.timeout,
-                    verify=self.config.verify_ssl
+                    params=params,
+                    timeout=self.timeout
                 )
                 
-                # Success case
-                if response.status_code == 200 or response.status_code == 201:
-                    self.logger.info(
-                        f"Successfully sent insights to Poke API",
-                        extra={
-                            "conversation_id": conversation_id,
-                            "status_code": response.status_code,
-                            "attempt": attempt + 1
-                        }
-                    )
-                    return APIResponse(
-                        success=True,
-                        status_code=response.status_code,
-                        data=response.json() if response.text else {},
-                        conversation_id=conversation_id,
-                        attempts=attempt + 1
+                # Log response
+                logger.info(f"Response status: {response.status_code}")
+                
+                # Handle different status codes
+                if response.status_code in (200, 201):
+                    result = response.json()
+                    logger.info("Request successful")
+                    self.metrics['requests_success'] += 1
+                    return result
+                
+                elif response.status_code == 401:
+                    raise PokeAPIAuthenticationError(
+                        f"Authentication failed: {response.text}"
                     )
                 
-                # Handle retryable errors
-                if self._should_retry(attempt, response.status_code):
-                    delay = self._calculate_backoff(attempt)
-                    self.logger.warning(
-                        f"Request failed with status {response.status_code}, retrying in {delay:.2f}s",
-                        extra={
-                            "conversation_id": conversation_id,
-                            "status_code": response.status_code,
-                            "attempt": attempt + 1,
-                            "max_retries": self.config.max_retries,
-                            "delay": delay
-                        }
+                elif response.status_code == 400:
+                    raise PokeAPIValidationError(
+                        f"Request validation failed: {response.text}"
                     )
-                    time.sleep(delay)
-                    attempt += 1
-                    continue
                 
-                # Non-retryable error
-                error_msg = f"Request failed with status {response.status_code}"
-                try:
-                    error_data = response.json()
-                    error_msg += f": {error_data.get('error', error_data)}"
-                except:
-                    error_msg += f": {response.text[:200]}"
+                elif response.status_code == 429:
+                    # Rate limit exceeded - retry with exponential backoff
+                    if retry_count < self.max_retries:
+                        self.metrics['retries_total'] += 1
+                        wait_time = self._calculate_backoff_with_jitter(retry_count, base_delay=2)
+                        logger.warning(
+                            f"Rate limit exceeded (429). Retrying in {wait_time:.2f} seconds... "
+                            f"(Attempt {retry_count + 1}/{self.max_retries})"
+                        )
+                        time.sleep(wait_time)
+                        return self._make_request(method, endpoint, data, params, retry_count + 1)
+                    else:
+                        raise PokeAPIRateLimitError(
+                            f"Rate limit exceeded and max retries ({self.max_retries}) reached: {response.text}"
+                        )
                 
-                self.logger.error(
-                    error_msg,
-                    extra={
-                        "conversation_id": conversation_id,
-                        "status_code": response.status_code,
-                        "attempt": attempt + 1
-                    }
-                )
+                elif response.status_code >= 500:
+                    # Server error - retry with exponential backoff
+                    if retry_count < self.max_retries:
+                        self.metrics['retries_total'] += 1
+                        wait_time = self._calculate_backoff_with_jitter(retry_count, base_delay=1)
+                        logger.warning(
+                            f"Server error {response.status_code}. Retrying in {wait_time:.2f} seconds... "
+                            f"(Attempt {retry_count + 1}/{self.max_retries})"
+                        )
+                        time.sleep(wait_time)
+                        return self._make_request(method, endpoint, data, params, retry_count + 1)
+                    else:
+                        raise PokeAPIError(
+                            f"Server error and max retries ({self.max_retries}) reached: {response.status_code} - {response.text}"
+                        )
                 
-                return APIResponse(
-                    success=False,
-                    status_code=response.status_code,
-                    error=error_msg,
-                    conversation_id=conversation_id,
-                    attempts=attempt + 1
-                )
+                else:
+                    raise PokeAPIError(
+                        f"Unexpected status code {response.status_code}: {response.text}"
+                    )
             
-            except (requests.ConnectionError, requests.Timeout) as e:
-                last_exception = e
-                
-                if self._should_retry(attempt, exception=e):
-                    delay = self._calculate_backoff(attempt)
-                    self.logger.warning(
-                        f"Connection error, retrying in {delay:.2f}s: {str(e)}",
-                        extra={
-                            "conversation_id": conversation_id,
-                            "attempt": attempt + 1,
-                            "max_retries": self.config.max_retries,
-                            "delay": delay,
-                            "error_type": type(e).__name__
-                        }
+            except requests.exceptions.Timeout:
+                if retry_count < self.max_retries:
+                    self.metrics['retries_total'] += 1
+                    wait_time = self._calculate_backoff_with_jitter(retry_count, base_delay=1)
+                    logger.warning(
+                        f"Request timeout. Retrying in {wait_time:.2f} seconds... "
+                        f"(Attempt {retry_count + 1}/{self.max_retries})"
                     )
-                    time.sleep(delay)
-                    attempt += 1
-                    continue
-                
-                break
+                    time.sleep(wait_time)
+                    return self._make_request(method, endpoint, data, params, retry_count + 1)
+                else:
+                    raise PokeAPIError(
+                        f"Request timeout and max retries ({self.max_retries}) reached"
+                    )
             
-            except Exception as e:
-                last_exception = e
-                self.logger.error(
-                    f"Unexpected error: {str(e)}",
-                    extra={
-                        "conversation_id": conversation_id,
-                        "attempt": attempt + 1,
-                        "error_type": type(e).__name__
-                    },
-                    exc_info=True
-                )
-                break
+            except requests.exceptions.ConnectionError as e:
+                if retry_count < self.max_retries:
+                    self.metrics['retries_total'] += 1
+                    wait_time = self._calculate_backoff_with_jitter(retry_count, base_delay=1)
+                    logger.warning(
+                        f"Connection error. Retrying in {wait_time:.2f} seconds... "
+                        f"(Attempt {retry_count + 1}/{self.max_retries})"
+                    )
+                    time.sleep(wait_time)
+                    return self._make_request(method, endpoint, data, params, retry_count + 1)
+                else:
+                    raise PokeAPIError(
+                        f"Connection error and max retries ({self.max_retries}) reached: {str(e)}"
+                    )
+            
+            except requests.exceptions.RequestException as e:
+                raise PokeAPIError(f"Request failed: {str(e)}")
         
-        # All retries exhausted
-        error_msg = f"Failed after {attempt + 1} attempts"
-        if last_exception:
-            error_msg += f": {str(last_exception)}"
-        
-        self.logger.error(
-            error_msg,
-            extra={
-                "conversation_id": conversation_id,
-                "total_attempts": attempt + 1
-            }
-        )
-        
-        return APIResponse(
-            success=False,
-            error=error_msg,
-            conversation_id=conversation_id,
-            attempts=attempt + 1
-        )
+        # Execute with circuit breaker
+        try:
+            return self.circuit_breaker.call(_execute_request)
+        except CircuitBreakerOpenError:
+            self.metrics['circuit_breaker_opens'] += 1
+            raise
+        except Exception as e:
+            self.metrics['requests_failed'] += 1
+            raise e
     
-    def send_batch(self, items: List[Dict[str, Any]]) -> 'BatchAPIResponse':
+    def send_insights(
+        self,
+        insights_data: Dict[str, Any],
+        conversation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Send multiple insights in batch
+        Send processed ChatGPT insights to Poke API.
         
         Args:
-            items: List of insights data to send
-            
+            insights_data: Dictionary containing conversation insights
+            conversation_id: Optional conversation identifier
+        
         Returns:
-            BatchAPIResponse with results for all items
-        """
-        self.logger.info(f"Sending batch of {len(items)} items to Poke API")
+            API response containing processing results
         
-        results = []
-        for item in items:
-            response = self.send_insights(item)
-            results.append(response)
-        
-        successful = sum(1 for r in results if r.success)
-        failed = len(results) - successful
-        
-        self.logger.info(
-            f"Batch send complete: {successful} successful, {failed} failed",
-            extra={
-                "total": len(results),
-                "successful": successful,
-                "failed": failed
+        Example:
+            insights = {
+                'title': 'My Conversation',
+                'topics': ['Python', 'API'],
+                'key_insights': ['Insight 1', 'Insight 2'],
+                'metadata': {...}
             }
-        )
+            response = client.send_insights(insights)
+        """
+        logger.info(f"Sending insights to Poke API{' for conversation ' + conversation_id if conversation_id else ''}")
         
-        return BatchAPIResponse(
-            results=results,
-            total=len(results),
-            successful=successful,
-            failed=failed
-        )
+        # Prepare payload
+        payload = {
+            'insights': insights_data,
+            'timestamp': datetime.now().isoformat(),
+            'source': 'chatgpt-notion-sync',
+            'client_version': '1.0'
+        }
+        
+        if conversation_id:
+            payload['conversation_id'] = conversation_id
+        
+        # Make request
+        response = self._make_request('POST', '/insights', data=payload)
+        
+        logger.info(f"Insights sent successfully. Response ID: {response.get('id', 'N/A')}")
+        return response
+    
+    def get_processing_status(self, processing_id: str) -> Dict[str, Any]:
+        """
+        Get status of insights processing.
+        
+        Args:
+            processing_id: ID returned from send_insights call
+        
+        Returns:
+            Processing status information
+        """
+        logger.info(f"Checking processing status for ID: {processing_id}")
+        
+        response = self._make_request('GET', f'/insights/{processing_id}/status')
+        
+        logger.info(f"Status: {response.get('status', 'unknown')}")
+        return response
+    
+    def batch_send_insights(
+        self,
+        insights_list: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Send multiple insights in a single batch request.
+        
+        Args:
+            insights_list: List of insights dictionaries
+        
+        Returns:
+            Batch processing results
+        
+        Example:
+            insights_list = [
+                {'title': 'Conv 1', 'topics': ['Python']},
+                {'title': 'Conv 2', 'topics': ['JavaScript']}
+            ]
+            response = client.batch_send_insights(insights_list)
+        """
+        logger.info(f"Sending batch of {len(insights_list)} insights to Poke API")
+        
+        payload = {
+            'insights_batch': insights_list,
+            'timestamp': datetime.now().isoformat(),
+            'source': 'chatgpt-notion-sync',
+            'batch_size': len(insights_list),
+            'client_version': '1.0'
+        }
+        
+        response = self._make_request('POST', '/insights/batch', data=payload)
+        
+        logger.info(f"Batch sent successfully. Processed: {response.get('processed_count', 0)}")
+        return response
     
     def health_check(self) -> bool:
         """
-        Check if Poke API is accessible
+        Check if Poke API is accessible and healthy.
         
         Returns:
             True if API is healthy, False otherwise
         """
         try:
-            # Try to make a simple request to verify connectivity
-            response = self.session.get(
-                self.config.api_endpoint.replace('/insights', '/health'),
-                timeout=5
-            )
-            return response.status_code == 200
+            logger.info("Performing health check")
+            response = self._make_request('GET', '/health')
+            return response.get('status') == 'healthy'
         except Exception as e:
-            self.logger.error(f"Health check failed: {str(e)}")
+            logger.error(f"Health check failed: {str(e)}")
             return False
     
+    def get_metrics(self) -> Dict[str, Any]:
+        """
+        Get client metrics for monitoring.
+        
+        Returns:
+            Dictionary of metrics including:
+            - requests_total: Total number of requests made
+            - requests_success: Number of successful requests
+            - requests_failed: Number of failed requests
+            - retries_total: Total number of retry attempts
+            - circuit_breaker_opens: Number of times circuit breaker opened
+            - circuit_breaker_state: Current circuit breaker state
+            - circuit_breaker_failure_count: Current failure count
+            - rate_limit: Configured rate limit
+            - current_requests_in_window: Current requests in rolling window
+        """
+        return {
+            **self.metrics,
+            'circuit_breaker_state': self.circuit_breaker.state.value,
+            'circuit_breaker_failure_count': self.circuit_breaker.failure_count,
+            'rate_limit': self.rate_limit,
+            'current_requests_in_window': len(self._request_times)
+        }
+    
     def close(self):
-        """Close the session and cleanup resources"""
-        if self.session:
-            self.session.close()
-            self.logger.info("Poke API client session closed")
-
-
-# ============================================================================
-# RESPONSE CLASSES
-# ============================================================================
-
-@dataclass
-class APIResponse:
-    """
-    Response from Poke API for a single request
-    
-    Attributes:
-        success: Whether the request was successful
-        status_code: HTTP status code (if available)
-        data: Response data (if successful)
-        error: Error message (if failed)
-        conversation_id: Conversation ID for tracking
-        attempts: Number of attempts made
-    """
-    success: bool
-    status_code: Optional[int] = None
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    conversation_id: Optional[str] = None
-    attempts: int = 1
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert response to dictionary"""
-        return {
-            'success': self.success,
-            'status_code': self.status_code,
-            'data': self.data,
-            'error': self.error,
-            'conversation_id': self.conversation_id,
-            'attempts': self.attempts
-        }
-
-
-@dataclass
-class BatchAPIResponse:
-    """
-    Response from Poke API for a batch request
-    
-    Attributes:
-        results: List of individual APIResponse objects
-        total: Total number of items
-        successful: Number of successful requests
-        failed: Number of failed requests
-    """
-    results: List[APIResponse]
-    total: int
-    successful: int
-    failed: int
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert batch response to dictionary"""
-        return {
-            'total': self.total,
-            'successful': self.successful,
-            'failed': self.failed,
-            'results': [r.to_dict() for r in self.results]
-        }
-    
-    @property
-    def success_rate(self) -> float:
-        """Calculate success rate as percentage"""
-        return (self.successful / self.total * 100) if self.total > 0 else 0.0
-
-
-# ============================================================================
-# CONVENIENCE FUNCTIONS
-# ============================================================================
-
-def send_to_poke(data: Dict[str, Any], config: Optional[PokeAPIConfig] = None) -> APIResponse:
-    """
-    Convenience function to send data to Poke API
-    
-    Args:
-        data: Insights data to send
-        config: Optional configuration (uses environment if not provided)
+        """Close the session and cleanup resources."""
+        self.session.close()
+        logger.info("PokeAPIClient session closed")
         
-    Returns:
-        APIResponse object
-    """
-    if config:
-        client = PokeAPIClient(config)
-    else:
-        client = PokeAPIClient.from_env()
-    
-    try:
-        return client.send_insights(data)
-    finally:
-        client.close()
+        # Log final metrics
+        metrics = self.get_metrics()
+        logger.info(f"Final metrics: {json.dumps(metrics, indent=2)}")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     # Example usage
-    import sys
+    print("Poke API Client Example")
+    print("=" * 60)
     
-    # Setup logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Example data
-    sample_data = {
-        "conversation_id": "conv_example_123",
-        "analysis_date": "2025-12-12T00:00:00Z",
-        "conversation_title": "Example Conversation",
-        "conversation_summary": "This is a test conversation",
-        "technical_insights": [
-            {"topic": "Python", "confidence": 0.9},
-            {"topic": "API Integration", "confidence": 0.85}
-        ],
-        "confidence_score": 0.87
-    }
-    
-    try:
-        # Create client from environment
-        client = PokeAPIClient.from_env()
-        
-        # Send data
-        response = client.send_insights(sample_data)
-        
-        if response.success:
-            print(f"✅ Success! Data sent to Poke API")
-            print(f"   Response: {response.data}")
-            print(f"   Attempts: {response.attempts}")
-        else:
-            print(f"❌ Failed to send data: {response.error}")
-            print(f"   Attempts: {response.attempts}")
-            sys.exit(1)
-    
-    except ValueError as e:
-        print(f"❌ Configuration error: {e}")
-        print("\nPlease set the POKE_API_KEY environment variable or GitHub Secret.")
-        sys.exit(1)
-    
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-        sys.exit(1)
-    
-    finally:
-        client.close()
+    # Check for API key
+    if not os.getenv('POKE_API_KEY'):
+        print("Error: POKE_API_KEY environment variable not set")
+        print("Set it with: export POKE_API_KEY='your-api-key'")
+    else:
+        try:
+            # Initialize client
+            client = PokeAPIClient()
+            
+            # Health check
+            if client.health_check():
+                print("✓ API is healthy")
+            else:
+                print("✗ API health check failed")
+            
+            # Example insights data
+            insights = {
+                'title': 'Example Conversation',
+                'topics': ['Python', 'API Integration'],
+                'key_insights': [
+                    'Implement retry logic with jitter for resilient API calls',
+                    'Use circuit breaker pattern to prevent cascading failures',
+                    'Enable request compression for efficiency'
+                ],
+                'metadata': {
+                    'message_count': 10,
+                    'model': 'GPT-4'
+                }
+            }
+            
+            # Send insights
+            response = client.send_insights(insights)
+            print(f"\n✓ Insights sent successfully")
+            print(f"Response: {json.dumps(response, indent=2)}")
+            
+            # Show metrics
+            print(f"\nClient Metrics:")
+            print(json.dumps(client.get_metrics(), indent=2))
+            
+            # Close client
+            client.close()
+            
+        except PokeAPIError as e:
+            print(f"\n✗ Poke API Error: {str(e)}")
+        except Exception as e:
+            print(f"\n✗ Error: {str(e)}")
