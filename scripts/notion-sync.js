@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * Notion Sync Script
+ * Notion Sync Script (Legacy)
  * Syncs JSON data from /data directory to Notion database
  * Handles validation, transformation, batching, and error recovery
+ * 
+ * NOTE: For new implementations, use src/index.js instead.
+ * This script is maintained for backward compatibility.
  */
 
 const fs = require('fs').promises;
@@ -22,9 +25,9 @@ const CONFIG = {
   NOTION_API_KEY: process.env.NOTION_API_KEY,
   NOTION_DATABASE_ID: process.env.NOTION_DATABASE_ID,
   
-  // File Paths
+  // File Paths - FIXED: Use correct schema path
   DATA_DIR: path.join(__dirname, '../data'),
-  SCHEMA_FILE: path.join(__dirname, '../config/schema.json'),
+  SCHEMA_FILE: path.join(__dirname, '../schemas/conversation-insights-schema.json'),
   SYNC_STATUS_FILE: path.join(__dirname, '../data/.sync-status.json'),
   
   // Rate Limiting & Batching
@@ -93,40 +96,24 @@ const DEFAULT_SCHEMA = {
   required: ['ConversationID', 'AnalysisDate'],
   properties: {
     ConversationID: { type: 'string' },
+    conversation_id: { type: 'string' },
     AnalysisDate: { type: 'string', format: 'date-time' },
+    analysis_date: { type: 'string', format: 'date-time' },
     LastSyncDate: { type: 'string', format: 'date-time' },
-    TechnicalInsights: { 
-      type: 'array', 
-      items: { type: 'string' },
-      maxItems: 100
-    },
-    ProblemSolvingPatterns: { 
-      type: 'array', 
-      items: { type: 'string' },
-      maxItems: 100
-    },
-    CommunicationStyle: { type: 'string' },
-    ConfidenceScore: { 
-      type: 'number', 
-      minimum: 0, 
-      maximum: 1 
-    },
-    TopicsOfInterest: { 
-      type: 'array', 
-      items: { type: 'string' },
-      maxItems: 50
-    },
-    KeySkills: { 
-      type: 'array', 
-      items: { type: 'string' },
-      maxItems: 50
-    },
-    ProjectInterests: { 
-      type: 'array', 
-      items: { type: 'string' },
-      maxItems: 50
-    },
-    GitHubSource: { type: 'string' }
+    TechnicalInsights: { type: 'array' },
+    technical_insights: { type: 'array' },
+    ProblemSolvingPatterns: { type: ['array', 'object'] },
+    problem_solving_patterns: { type: ['array', 'object'] },
+    CommunicationStyle: { type: ['string', 'object'] },
+    communication_style: { type: ['string', 'object'] },
+    ConfidenceScore: { type: 'number', minimum: 0, maximum: 1 },
+    confidence_score: { type: 'number', minimum: 0, maximum: 1 },
+    TopicsOfInterest: { type: 'array' },
+    topics_of_interest: { type: 'array' },
+    KeySkills: { type: 'array' },
+    key_skills: { type: 'array' },
+    ProjectInterests: { type: 'array' },
+    project_interests: { type: 'array' },
   },
   additionalProperties: true
 };
@@ -137,10 +124,13 @@ async function loadSchema() {
   try {
     const schemaContent = await fs.readFile(CONFIG.SCHEMA_FILE, 'utf-8');
     const schema = JSON.parse(schemaContent);
-    logger.info('Schema loaded from file');
+    logger.info('Schema loaded from file', { path: CONFIG.SCHEMA_FILE });
     return schema;
   } catch (error) {
-    logger.warn('Schema file not found, using default schema', { error: error.message });
+    logger.warn('Schema file not found, using default schema', { 
+      error: error.message,
+      attemptedPath: CONFIG.SCHEMA_FILE 
+    });
     return DEFAULT_SCHEMA;
   }
 }
@@ -174,20 +164,48 @@ function validateData(data, filename) {
 // DATA TRANSFORMATION
 // ============================================================================
 
+function extractFromNestedArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  
+  return arr.map(item => {
+    if (typeof item === 'string') return item;
+    if (typeof item === 'object') {
+      return item.topic || item.insight || item.skill || item.project_type || JSON.stringify(item);
+    }
+    return String(item);
+  });
+}
+
+function extractFromNestedObject(obj, defaultValue = '') {
+  if (typeof obj === 'string') return obj;
+  if (typeof obj === 'object' && obj !== null) {
+    const values = [];
+    if (obj.clarity) values.push(obj.clarity);
+    if (obj.technical_depth) values.push(obj.technical_depth);
+    if (obj.engagement_level) values.push(obj.engagement_level);
+    if (obj.approach) values.push(obj.approach);
+    if (obj.thinking_style) values.push(obj.thinking_style);
+    return values.join(', ') || defaultValue;
+  }
+  return defaultValue;
+}
+
 function transformToNotionProperties(data) {
   const properties = {};
   
-  // ConversationID - Title property
-  if (data.ConversationID) {
+  // ConversationID - Title property (support both formats)
+  const conversationId = data.conversation_id || data.ConversationID;
+  if (conversationId) {
     properties.ConversationID = {
-      title: [{ text: { content: String(data.ConversationID) } }]
+      title: [{ text: { content: String(conversationId) } }]
     };
   }
   
   // AnalysisDate - Date property
-  if (data.AnalysisDate) {
+  const analysisDate = data.analysis_date || data.AnalysisDate;
+  if (analysisDate) {
     properties.AnalysisDate = {
-      date: { start: new Date(data.AnalysisDate).toISOString().split('T')[0] }
+      date: { start: new Date(analysisDate).toISOString().split('T')[0] }
     };
   }
   
@@ -196,59 +214,93 @@ function transformToNotionProperties(data) {
     date: { start: new Date().toISOString().split('T')[0] }
   };
   
-  // TechnicalInsights - Multi-select property
-  if (Array.isArray(data.TechnicalInsights) && data.TechnicalInsights.length > 0) {
-    properties.TechnicalInsights = {
-      multi_select: data.TechnicalInsights.slice(0, 100).map(item => ({ name: String(item).slice(0, 100) }))
-    };
+  // TechnicalInsights - Multi-select property (handle nested)
+  const technicalInsights = data.technical_insights || data.TechnicalInsights;
+  if (technicalInsights) {
+    const insights = extractFromNestedArray(technicalInsights);
+    if (insights.length > 0) {
+      properties.TechnicalInsights = {
+        multi_select: insights.slice(0, 100).map(item => ({ name: String(item).slice(0, 100) }))
+      };
+    }
   }
   
-  // ProblemSolvingPatterns - Multi-select property
-  if (Array.isArray(data.ProblemSolvingPatterns) && data.ProblemSolvingPatterns.length > 0) {
-    properties.ProblemSolvingPatterns = {
-      multi_select: data.ProblemSolvingPatterns.slice(0, 100).map(item => ({ name: String(item).slice(0, 100) }))
-    };
+  // ProblemSolvingPatterns - Multi-select property (handle nested)
+  const problemSolving = data.problem_solving_patterns || data.ProblemSolvingPatterns;
+  if (problemSolving) {
+    let patterns = [];
+    if (Array.isArray(problemSolving)) {
+      patterns = extractFromNestedArray(problemSolving);
+    } else if (typeof problemSolving === 'object') {
+      if (problemSolving.patterns_identified) {
+        patterns.push(...problemSolving.patterns_identified);
+      }
+      if (problemSolving.strengths) {
+        patterns.push(...problemSolving.strengths);
+      }
+    }
+    if (patterns.length > 0) {
+      properties.ProblemSolvingPatterns = {
+        multi_select: patterns.slice(0, 100).map(item => ({ name: String(item).slice(0, 100) }))
+      };
+    }
   }
   
-  // CommunicationStyle - Select property
-  if (data.CommunicationStyle) {
+  // CommunicationStyle - Select property (handle nested)
+  const communicationStyle = data.communication_style || data.CommunicationStyle;
+  if (communicationStyle) {
+    const style = extractFromNestedObject(communicationStyle, 'Not specified');
     properties.CommunicationStyle = {
-      select: { name: String(data.CommunicationStyle).slice(0, 100) }
+      select: { name: String(style).slice(0, 100) }
     };
   }
   
   // ConfidenceScore - Number property
-  if (typeof data.ConfidenceScore === 'number') {
+  const confidenceScore = data.confidence_score || data.ConfidenceScore;
+  if (typeof confidenceScore === 'number') {
     properties.ConfidenceScore = {
-      number: Math.round(data.ConfidenceScore * 100) / 100
+      number: Math.round(confidenceScore * 100) / 100
     };
   }
   
-  // TopicsOfInterest - Multi-select property
-  if (Array.isArray(data.TopicsOfInterest) && data.TopicsOfInterest.length > 0) {
-    properties.TopicsOfInterest = {
-      multi_select: data.TopicsOfInterest.slice(0, 50).map(item => ({ name: String(item).slice(0, 100) }))
-    };
+  // TopicsOfInterest - Multi-select property (handle nested)
+  const topicsOfInterest = data.topics_of_interest || data.TopicsOfInterest;
+  if (topicsOfInterest) {
+    const topics = extractFromNestedArray(topicsOfInterest);
+    if (topics.length > 0) {
+      properties.TopicsOfInterest = {
+        multi_select: topics.slice(0, 50).map(item => ({ name: String(item).slice(0, 100) }))
+      };
+    }
   }
   
-  // KeySkills - Multi-select property
-  if (Array.isArray(data.KeySkills) && data.KeySkills.length > 0) {
-    properties.KeySkills = {
-      multi_select: data.KeySkills.slice(0, 50).map(item => ({ name: String(item).slice(0, 100) }))
-    };
+  // KeySkills - Multi-select property (handle nested)
+  const keySkills = data.key_skills || data.KeySkills;
+  if (keySkills) {
+    const skills = extractFromNestedArray(keySkills);
+    if (skills.length > 0) {
+      properties.KeySkills = {
+        multi_select: skills.slice(0, 50).map(item => ({ name: String(item).slice(0, 100) }))
+      };
+    }
   }
   
-  // ProjectInterests - Multi-select property
-  if (Array.isArray(data.ProjectInterests) && data.ProjectInterests.length > 0) {
-    properties.ProjectInterests = {
-      multi_select: data.ProjectInterests.slice(0, 50).map(item => ({ name: String(item).slice(0, 100) }))
-    };
+  // ProjectInterests - Multi-select property (handle nested)
+  const projectInterests = data.project_interests || data.ProjectInterests;
+  if (projectInterests) {
+    const projects = extractFromNestedArray(projectInterests);
+    if (projects.length > 0) {
+      properties.ProjectInterests = {
+        multi_select: projects.slice(0, 50).map(item => ({ name: String(item).slice(0, 100) }))
+      };
+    }
   }
   
   // GitHubSource - Rich text property
-  if (data.GitHubSource) {
+  const githubSource = data.github_source || data.GitHubSource;
+  if (githubSource) {
     properties.GitHubSource = {
-      rich_text: [{ text: { content: String(data.GitHubSource).slice(0, 2000) } }]
+      rich_text: [{ text: { content: String(githubSource).slice(0, 2000) } }]
     };
   }
   
@@ -340,7 +392,7 @@ async function updateNotionPage(pageId, properties, retryCount = 0) {
 }
 
 async function syncToNotion(data) {
-  const conversationId = data.ConversationID;
+  const conversationId = data.conversation_id || data.ConversationID;
   const properties = transformToNotionProperties(data);
   
   try {
@@ -463,6 +515,7 @@ async function processBatch(items, syncStatus) {
     
     batchResults.forEach((result, index) => {
       const item = batch[index];
+      const conversationId = item.conversation_id || item.ConversationID;
       
       if (result.status === 'fulfilled' && result.value.success) {
         if (result.value.action === 'created') {
@@ -473,7 +526,7 @@ async function processBatch(items, syncStatus) {
         
         // Track in sync status
         syncStatus.processedFiles[item._sourceFile] = {
-          conversationId: item.ConversationID,
+          conversationId,
           lastSync: new Date().toISOString(),
           status: 'success'
         };
@@ -484,13 +537,13 @@ async function processBatch(items, syncStatus) {
           : result.value.error;
         
         results.errors.push({
-          conversationId: item.ConversationID,
+          conversationId,
           file: item._sourceFile,
           error
         });
         
         syncStatus.processedFiles[item._sourceFile] = {
-          conversationId: item.ConversationID,
+          conversationId,
           lastSync: new Date().toISOString(),
           status: 'failed',
           error
@@ -535,6 +588,7 @@ async function main() {
   
   try {
     logger.info('=== Notion Sync Started ===');
+    logger.info('NOTE: This is the legacy script. Consider using src/index.js for new features.');
     
     // Ensure logs directory exists
     await ensureLogsDirectory();
@@ -568,7 +622,7 @@ async function main() {
       } else {
         validationErrors.push({
           file: data._sourceFile,
-          conversationId: data.ConversationID,
+          conversationId: data.conversation_id || data.ConversationID,
           errors: validation.errors
         });
       }
