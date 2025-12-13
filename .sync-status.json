@@ -1,29 +1,37 @@
 {
   "lastSyncRun": {
-    "timestamp": "2025-12-12T12:00:00.000Z",
+    "timestamp": "2025-12-13T04:00:00.000Z",
     "date": "December 12, 2025",
-    "time": "7:00 AM EST",
+    "time": "11:00 PM EST",
     "status": "completed",
     "checks": {
-      "insightFiles": {
-        "status": "verified",
-        "description": "Checked for new/updated insight files and confirmed all data is current"
-      },
       "dataDirectory": {
         "status": "verified",
-        "description": "Data directory structure checked and validated"
+        "description": "No new JSON files found in /data directory",
+        "newFilesFound": 0
       },
-      "notionDatabase": {
-        "status": "connected",
-        "description": "Notion database connection verified and operational"
+      "syncProcess": {
+        "status": "completed",
+        "description": "Sync completed successfully"
       }
     },
     "automation": {
       "triggered": "scheduled",
-      "type": "sync_check"
+      "type": "sync_check",
+      "result": "success"
     }
   },
   "syncHistory": [
+    {
+      "timestamp": "2025-12-13T04:00:00.000Z",
+      "date": "December 12, 2025",
+      "time": "11:00 PM EST",
+      "status": "completed",
+      "description": "Automation ran successfully - No new JSON files found in /data directory, sync completed successfully",
+      "dataDirectoryCheck": "passed",
+      "newFilesFound": 0,
+      "syncStatus": "success"
+    },
     {
       "timestamp": "2025-12-12T12:00:00.000Z",
       "status": "completed",
