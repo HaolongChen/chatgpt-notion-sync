@@ -1,15 +1,14 @@
 {
   "lastSyncRun": {
-    "timestamp": "2025-12-15T18:02:00.000Z",
-    "date": "December 15, 2025",
-    "time": "1:02 PM EST",
+    "timestamp": "2025-12-16T16:00:00.000Z",
+    "date": "December 16, 2025",
+    "time": "11:00 AM EST",
     "status": "completed",
-    "file": "sample-insight.json",
     "checks": {
       "dataDirectory": {
         "status": "verified",
-        "description": "sample-insight.json successfully synced",
-        "filesProcessed": 1
+        "description": "No new files found to process",
+        "filesProcessed": 0
       },
       "syncProcess": {
         "status": "completed",
@@ -18,11 +17,22 @@
     },
     "automation": {
       "triggered": "manual",
-      "type": "file_sync",
+      "type": "sync_check",
       "result": "success"
     }
   },
   "syncHistory": [
+    {
+      "timestamp": "2025-12-16T16:00:00.000Z",
+      "date": "December 16, 2025",
+      "time": "11:00 AM EST",
+      "status": "completed",
+      "description": "Sync completed successfully - No new files found to process",
+      "dataDirectoryCheck": "passed",
+      "newFilesFound": 0,
+      "filesProcessed": 0,
+      "syncStatus": "success"
+    },
     {
       "timestamp": "2025-12-15T18:02:00.000Z",
       "date": "December 15, 2025",
