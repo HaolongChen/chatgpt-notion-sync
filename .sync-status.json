@@ -1,27 +1,41 @@
 {
   "lastSyncRun": {
-    "timestamp": "2025-12-16T16:00:00.000Z",
+    "timestamp": "2025-12-16T20:01:00.000Z",
     "date": "December 16, 2025",
-    "time": "11:00 AM EST",
+    "time": "3:01 PM EST",
     "status": "completed",
     "checks": {
       "dataDirectory": {
         "status": "verified",
-        "description": "No new files found to process",
-        "filesProcessed": 0
+        "description": "Successfully processed sample-insight.json",
+        "filesProcessed": 1
       },
       "syncProcess": {
         "status": "completed",
-        "description": "Sync operation completed successfully"
+        "description": "Sync operation completed successfully",
+        "file": "sample-insight.json",
+        "notionPageId": "2cb1582bd72681909453c24149111573"
       }
     },
     "automation": {
       "triggered": "manual",
-      "type": "sync_check",
+      "type": "sync_operation",
       "result": "success"
     }
   },
   "syncHistory": [
+    {
+      "timestamp": "2025-12-16T20:01:00.000Z",
+      "date": "December 16, 2025",
+      "time": "3:01 PM EST",
+      "status": "completed",
+      "description": "Sync completed successfully - sample-insight.json synced to Notion",
+      "file": "sample-insight.json",
+      "notionPageId": "2cb1582bd72681909453c24149111573",
+      "dataDirectoryCheck": "passed",
+      "filesProcessed": 1,
+      "syncStatus": "success"
+    },
     {
       "timestamp": "2025-12-16T16:00:00.000Z",
       "date": "December 16, 2025",
